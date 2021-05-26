@@ -3477,5 +3477,305 @@ private void unparkSuccessor(Node node) {
 
 
 
+## 20. 引用
 
+### 20.1. 强引用
+
+平时我们所用的引用就是强引用。
+
+```java
+Object o = new Object();
+// 引用 o 指向堆中的Object对象
+// 当引用 o 不存在的时候, 堆中的 Object 对象才会变成垃圾
+```
+
+
+
+**扩展**：Java回收垃圾可以被追踪，Object类中有 `finalize()`，每次GC的时候都会调用这个方法。
+
+下面是Demo：
+
+```java
+public class M {
+    // 重写 finalize()
+    @Override
+    protected void finalize() throws Throwable {
+        System.out.println("finalize..");
+        super.finalize();
+    }
+}
+```
+
+```java
+public class NormalReferenceDemo {
+    public static void main(String[] args) throws Exception {
+        M m = new M();
+        m = null;
+        System.gc();	// JVM会将堆中的对象M回收
+        
+        // 阻塞 main 线程
+        System.in.read();
+    }
+}
+```
+
+```java
+// 运行结果
+finalize..
+```
+
+
+
+> **问题**：
+>
+> 1、为什么案例中要写 `System.in.read();`，不写会有什么问题？
+>
+> 当 main 线程走完之后，JVM全部退出，GC线程也会退出。有可能堆中的对象M还没被回收整个程序就结束了，这种情况下会看不到输出结果。 
+>
+> 2、GC调优的场景？
+>
+> 小米遇到的情况：频繁FGC，OOM的情况。
+>
+> 原因：C++程序员转成Java程序员重写了 `finalize() `方法。
+>
+> （1）为什么C++程序员会重写 `finalize()` 方法？ 
+>
+> ​		 C++需要手动释放内存，认为 Java 的 finalize 可以自动释放内存。
+>
+> （2）为什么重写 `finalize()` 方法会发生FGC和OOM？
+>
+> ​		重写的 `finalize()` 中放了耗时的操作，等于延长了对象的生命周期。对象产生的速度快，回收的速度		慢，就会造成OOM。	
+
+
+
+### 20.2. 软引用
+
+**结论**：
+
+- 当堆内存够用时，软引用（前提不是垃圾）不会被GC回收。
+- 当内存不够用时，软引用会被GC回收。软引用被GC回收后，堆内存还是不够用，直接OOM。
+- 强引用（前提不是垃圾）宁肯OOM，也不会被回收。
+
+> **注意**：
+>
+> - 软引用只是逻辑上的软，而不是物理上的软软的指向内存。
+
+
+
+**案例**：
+
+step1、设置JVM堆最大空间为20M。
+
+```shell
+Vm Options: -Xmx20M
+```
+
+step2、创建软引用，指向10M的byte数组，然后再创建强引用，指向12M的byte数组。
+
+```java
+public class SoftReferenceDemo {
+    public static void main(String[] args) throws Exception {
+        SoftReference<byte[]> m =
+                new SoftReference<>(new byte[1024 * 1024 * 10]);
+
+        System.out.println(m.get());            // 拿到字节数组
+        System.gc();
+        Thread.sleep(500);
+        System.out.println(m.get());            // GC之后拿到字节数组
+
+        byte[] b = new byte[1024 * 1024 * 12];  // 堆里再分配15M空间, 显然堆中空间不够
+        System.out.println(m.get());            // 拿不到软引用值了
+    }
+}
+```
+
+```java
+// 运行结果
+[B@4554617c
+[B@4554617c
+null
+```
+
+<img src="https://cdn.jsdelivr.net/gh/RingoTangs/image-hosting@master/MultiThreadConcurrent/SoftReference.4hsy6lc7j0g0.png" alt="弱引用关系图" style="zoom:150%;" />
+
+
+
+**应用场景**：
+
+```java
+// SoftReference源码 注释
+/**
+ * Soft reference objects, which are cleared at the discretion of the garbage
+ * collector in response to memory demand.  Soft references are most often used
+ * to implement memory-sensitive caches.
+ */
+```
+
+**当内存需要的时候，软引用对象会被GC清除**。
+
+**软引用经常被用于内存敏感的缓存**。
+
+
+
+### 20.3. 弱引用
+
+```java
+public class WeakReferenceDemo {
+    public static void main(String[] args) throws Exception {
+        WeakReference<M> wf = new WeakReference<>(new M());
+        System.out.println(wf.get());
+        System.gc();
+        Thread.sleep(500);
+        System.out.println(wf.get());			// gc之后直接就被回收了
+    }
+}
+```
+
+```java
+// 输出结果
+com.ymy.boot.reference.M@4554617c
+finalize..
+null
+```
+
+
+
+
+
+### 20.4. 虚引用（虚幻）
+
+`PhantomReference`
+
+**作用**：管理直接内存。我们用不到。在 JVM get() 是 获取不到的！
+
+
+
+## 21. ThreadLocal
+
+### 21.1. 入门案例
+
+```java
+public class ThreadLocalDemo {
+    
+    // 创建 ThreadLocal
+    private static final ThreadLocal<Person> tl = new ThreadLocal<>();
+
+    public static void main(String[] args) {
+        
+        // t1线程 2s 后拿
+        new Thread(() -> {
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println(tl.get());
+        }).start();
+
+        // t2线程 1s 后取
+        new Thread(() -> {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            tl.set(new Person(Thread.currentThread().getName()));
+        }).start();
+    }
+
+    private static class Person {
+        private String name;
+
+        public Person(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String toString() {
+            return "Person{" +
+                "name='" + name + '\'' +
+                '}';
+        }
+    }
+}
+```
+
+```java
+// 运行结果
+null
+```
+
+> 一个线程在ThreadLocal中存对象，另一个线程取对象，结果是取不到！
+>
+> **ThreadLocal可以起到线程隔离的作用，和线程进行了绑定**。
+
+
+
+### 2.2. ThreadLocal源码
+
+```java
+// ThreadLocal的set()方法
+public void set(T value) {
+    // 1: 通过当前线程获得 ThreadLocalMap
+    Thread t = Thread.currentThread();
+    ThreadLocalMap map = getMap(t);
+
+    // 2: ThreadLocal 对象为 key, 案例中的 Person 对象为 value，添加到 ThreadLocalMap 中
+    // ThreadLocalMap 是 Thread 类中的一个属性
+    if (map != null)
+        map.set(this, value);
+    else
+        createMap(t, value);
+}
+
+// ThreadLocal的createMap()方法
+void createMap(Thread t, T firstValue) {
+    t.threadLocals = new ThreadLocalMap(this, firstValue);
+}
+```
+
+
+
+```java
+// ThreadLocal源码
+
+// ThreadLocalMap 是 ThreadLocal 的静态内部类
+// ThreadLocalMap 构造方法
+ThreadLocalMap(ThreadLocal<?> firstKey, Object firstValue) {
+    // ThreadLocalMap 就是用 Entry 数组构成的
+    table = new Entry[INITIAL_CAPACITY];
+    int i = firstKey.threadLocalHashCode & (INITIAL_CAPACITY - 1);
+    table[i] = new Entry(firstKey, firstValue);
+    size = 1;
+    setThreshold(INITIAL_CAPACITY);
+}
+
+// Entry 是 ThreadLocal 的讲台内部类
+// Entry 是自弱引用的子类
+static class Entry extends WeakReference<ThreadLocal<?>> {
+    /** The value associated with this ThreadLocal. */
+    Object value;
+
+    Entry(ThreadLocal<?> k, Object v) {
+        super(k);				// 弱引用中传的 ThreadLocal 对象
+        value = v;
+    }
+}
+```
+
+
+
+> **弱引用指向的是 ThreadLocal 对象，当强引用不再指向 ThreadLocal 对象后，只要遇到GC就会将ThreadLocal对象清理**。
+>
+> **当我们将案例中的 tl 设置为 null 的时候，只要触发 GC 创建的 ThreadLocal 对象就会被回收，ThreadLocalMap中的 key 就会变为 null**。
+>
+> **假设 ThreadLocalMap 的 Entry 对 ThreadLocal 对象是强引用，需要 ThreadLocalMap 的 key 不使用 ThreadLocal 对象之后，创建的 ThreadLocal 对象才会被GC回收，这就会造成内存泄漏**。
+>
+> 内存泄漏（Memory Leak）是指程序中已动态分配的堆内存由于某种原因程序未释放或无法释放，造成系统内存的浪费，导致程序运行速度减慢甚至系统崩溃等严重后果。
+
+![ThreadLocal对象引用图](https://cdn.jsdelivr.net/gh/RingoTangs/image-hosting@master/MultiThreadConcurrent/ThreadLocal.125vty94s19c.png)
+
+
+
+> **注意**： tl 对 ThreadLocal 对象是强引用，ThreadLocalMap 中 key 对 ThreadLocal 对象是弱引用，当 tl 设置为 null 时，触发 GC，ThreadLocal 对象会被回收，因此 ThreadLocalMap 中的 key 会变成 null，但是 value 还是强引用的 Person 对象。我们需要手动 remove ThreadLocalMap中的 k-v，将 value 设置为 null，删除 value 对 Person 对象的强引用。
 
